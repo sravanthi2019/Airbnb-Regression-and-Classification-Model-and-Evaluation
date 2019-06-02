@@ -1,0 +1,812 @@
+```{r}
+library(dplyr)
+library(psych)
+library(tidyverse)
+library(stringr)
+library(DAAG)
+library(ggplot2)
+library(stats)
+library(gridExtra)
+library(glmnet)
+library(dplyr)
+install.packages("devtools")
+library(devtools)
+library(MASS)
+install.packages("data.table")
+library(data.table)
+library(ggplot2)
+install.packages("ggmap")
+library(ggmap)
+#install.packages("ggrepel")
+library(ggrepel)
+#install.packages("lubridate")
+library(lubridate)
+library(rgdal)
+install.packages("ipred")
+install.packages("caret")
+library(caret)
+```
+
+```{r}
+## impotind data
+Airbnb <- read.csv("C:\\Users\\kgajj\\Downloads\\airbnblisting.csv")
+head(Airbnb)
+
+#Removing unnecessary columns
+Airbnb[,c("review_scores_accuracy","review_scores_checkin","review_scores_location","review_scores_rating","review_scores_cleanliness","review_scores_value","number_of_reviews_ltm","reviews_per_month","review_scores_communication","square_feet")] <- NULL
+View(Airbnb)
+dim(Airbnb)
+describe(Airbnb)
+summary(Airbnb)
+str(Airbnb)
+names(Airbnb)
+```
+
+
+
+
+```{r}
+#Data cleaning
+# Filling null values with median of the column
+Airbnb$bathrooms[is.na(Airbnb$bathrooms)] <- median(Airbnb$bathrooms,na.rm = TRUE)
+Airbnb$beds[is.na(Airbnb$beds)]<- median(Airbnb$beds,na.rm = TRUE)
+
+#Data transformation from char to int
+Airbnb$price <- as.numeric(gsub("[\\$,]","", Airbnb$price))
+Airbnb$cleaning_fee <- as.numeric(gsub("[\\$,]","",Airbnb$cleaning_fee))
+
+# filling null values with mode of the column
+Mode <- function(x) {
+  ux <- unique(x)
+  tab <- tabulate(match(x, ux))
+  ux[tab == max(tab)]
+}
+Airbnb$zipcode[is.na(Airbnb$zipcode)] <- Mode(Airbnb$zipcode)
+#filling the values with price columnvalue*0.6
+Airbnb$zipcode <- as.factor(Airbnb$zipcode)
+
+for (i in 1:nrow(Airbnb)){ 
+  if( is.na(Airbnb$cleaning_fee[i]) == TRUE){
+    Airbnb$cleaning_fee[i] = Airbnb$price[i]*0.6
+  }else{
+    Airbnb$cleaning_fee[i] = Airbnb$cleaning_fee[i]
+  }
+  
+}
+typeof(Airbnb$host_)
+Airbnb$host_response_rate <- as.numeric(Airbnb$host_response_rate)
+Airbnb$host_response_rate[is.na(Airbnb$host_response_rate)] <- median(Airbnb$host_response_rate,na.rm = TRUE)
+
+# handle rows with zero
+Airbnb[Airbnb$bathrooms == 0 ,"bathrooms"] <- median(Airbnb$bathrooms)
+Airbnb[Airbnb$bedrooms == 0 ,"bedrooms"] <- max(Airbnb$bedrooms)
+Airbnb[Airbnb$beds == 0 ,"beds"] <- median(Airbnb$beds)
+Airbnb[Airbnb$price == 0 ,"price"] <- median(Airbnb$price)
+Airbnb[Airbnb$number_of_reviews == 0 ,"number_of_reviews"] <- median(Airbnb$number_of_reviews)
+
+
+summary(Airbnb)
+
+```
+
+
+```{r}
+
+# univariate analysis
+Airbnb %>%
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_density(alpha=.3, fill="red")+theme_bw()
+```
+
+
+```{r}
+# Feature selection with Boruta
+install.packages("caret")
+install.packages("ipred")
+library(caret)
+library(mlbench)
+install.packages("Boruta")
+names(Airbnb)
+```
+
+```{r}
+library(Boruta)
+set.seed(123)
+boruta.train <- Boruta(price~., data = Airbnb, doTrace = 2)
+print(boruta.train)
+
+
+```
+
+```{r}
+summary(boruta.train)
+boruta.train$finalDecision
+final.boruta <- TentativeRoughFix(boruta.train)
+print(final.boruta)
+```
+
+```{r}
+#boruta feature imporatnt box plot
+plot(boruta.train, xlab = "", xaxt = "n")
+lz<-lapply(1:ncol(boruta.train$ImpHistory),function(i)
+boruta.train$ImpHistory[is.finite(boruta.train$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.train$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(boruta.train$ImpHistory), cex.axis = 0.7)
+```
+
+```{r}
+final.boruta <- TentativeRoughFix(boruta.train)
+print(final.boruta)
+getSelectedAttributes(final.boruta, withTentative = F)
+boruta.df <- attStats(final.boruta)
+ print(boruta.df)
+```
+
+```{r}
+#Created new data frame with top imporatnt features
+Airbnb_new_price <- Airbnb[,c("property_type","zipcode","guests_included","accommodates","room_type","bedrooms","bathrooms","host_response_rate","longitude","latitude",
+                              "availability_365","price","cancellation_policy","host_id")]
+```
+
+```{r}
+# univariate analysis
+Airbnb_new_price %>%
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_density(alpha=.3, fill="red")+theme_bw()
+```
+
+```{r}
+# applied log to numeric columns and created new dat frame logdf
+logdf <- Airbnb_new_price
+logdf$bathrooms <- log(Airbnb_new_price$bathrooms+1)
+logdf$accommodates <- log(Airbnb_new_price$accommodates+1)
+logdf$bedrooms <- log(Airbnb_new_price$bedrooms+1)
+logdf$price <- log(Airbnb_new_price$price+1)
+```
+
+```{r}
+
+## after applying log transformation Univariate analysis
+logdf %>%
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_density(alpha=.1, fill="green")+theme_bw()
+
+
+
+```
+
+```{r}
+#bivariate analysis
+library(ggcorrplot)
+Airbnb_corr <- logdf %>%
+  keep(is.numeric)
+##multivariate analysis
+#View(Airbnb_corr)
+corr <- cor(Airbnb_corr)
+ggcorrplot(corr,method ="circle")
+```
+
+
+```{r}
+
+# One hot encoding for all the regression models
+logdf$property_type <-  factor(logdf$property_type) 
+logdf$room_type <-  factor(logdf$room_type)
+logdf$zipcode <- factor(logdf$zipcode)
+dumm  <- as.data.frame(model.matrix(~logdf$property_type)[,-1])
+dumm1 <-  as.data.frame(model.matrix(~logdf$room_type)[,-1])
+dumm2 <-  as.data.frame(model.matrix(~logdf$zipcode)[,-1])
+logdf = cbind(logdf, dumm,dumm1,dumm2) 
+str(logdf)
+logdf <- logdf[,-c(1,2,5)]
+dim(dumm)
+View(logdf)
+```
+
+
+```{r}
+# data Splitting for training and testing
+set.seed(120)
+train_idx <- sample(1:nrow(logdf),as.integer(0.7*nrow(logdf)))
+train_data <- logdf[train_idx, ]
+test_data <-  logdf[-train_idx, ]
+
+```
+
+
+```{r}
+
+#linear model using variables from final model in anova
+
+fit <- lm(price~.,data  = train_data)
+summary(fit)
+plot(fit)
+
+# cross validation of model
+cvlm <- cv.lm(train_data, fit, m=10)
+y_price <- test_data[,c(9)]
+
+# preidction
+lmpre <- predict(fit, newdata = test_data)
+summary(lmpre)
+anova(fit)
+RMSE(exp(lmpre),exp(y_price))
+data.frame ( R2 = R2(lmpre, y_price),
+            RMSE = RMSE(exp(lmpre),exp(y_price)),
+            MAE = MAE(exp(lmpre), exp(y_price)))
+
+
+
+```
+
+
+```{r}
+#converted the splitting data to matrix for lasso ridge and elastic net
+x= model.matrix(price~., data = train_data)
+y = train_data$price
+View(x)
+View(y)
+xtest <- model.matrix(price~.,data = test_data)
+ytest <- test_data$price
+```
+
+```{r}
+#lasso,ridge,elnet
+install.packages("glmnet")
+library(glmnet)
+
+#fitting lasso, ridge, elnet
+fit.lasso <- glmnet(x, y, family="gaussian", alpha=1)
+fit.ridge <- glmnet(x, y, family="gaussian", alpha=0)
+fit.elnet <- glmnet(x, y, family="gaussian", alpha=.5)
+
+```
+
+```{r}
+#cross validation of lasso,ridge and elnet
+fit.lasso.cv <- cv.glmnet(x, y, type.measure="mse", alpha=1,family="gaussian")
+fit.ridge.cv <- cv.glmnet(x, y, type.measure="mse", alpha=0,family="gaussian")
+fit.elnet.cv <- cv.glmnet(x, y, type.measure="mse", alpha=.5,family="gaussian")
+
+#Coeffiients of lasso ridge and elastic net
+summary(fit.lasso.cv)
+coefficients(fit.lasso.cv)
+
+coefficients(fit.ridge.cv)
+summary(fit.ridge.cv)
+
+coefficients(fit.elnet.cv)
+
+```
+
+```{r}
+#prediction of lasso ridge and elnet usind lambda min and lambda 1se
+lasso.pred.min = predict(fit.lasso.cv, s = fit.lasso.cv$lambda.min, newx = xtest)
+lasso.pred.lse = predict(fit.lasso.cv, s = fit.lasso.cv$lambda.1se, newx = xtest)
+
+ridge.pred.min <-  predict(fit.ridge.cv, s = fit.ridge.cv$lambda.min, newx = xtest)
+ridge.pred.lse <-  predict(fit.ridge.cv, s = fit.ridge.cv$lambda.1se, newx = xtest)
+
+elnet.pred.min <-  predict(fit.elnet.cv, s = fit.elnet.cv$lambda.min, newx = xtest)
+elnet.pred.lse <-  predict(fit.elnet.cv, s = fit.elnet.cv$lambda.1se, newx = xtest)
+
+```
+
+```{r}
+
+#lasso R^2 ,RMSE,MAE data frame with lambda.min,lambda.1se
+data.frame( R2 = R2(lasso.pred.min, ytest),
+            RMSE = RMSE(exp(lasso.pred.min),exp(ytest)),
+            MAE = MAE(exp(lasso.pred.min), exp(ytest)))
+
+data.frame( R2 = R2(lasso.pred.lse, ytest),
+            RMSE = RMSE(exp(lasso.pred.lse), exp(ytest)),
+            MAE = MAE(exp(lasso.pred.lse), exp(ytest)))
+
+#ridge R^2 ,RMSE,MAE data frame with lambda.min,lambda.1se
+data.frame( R2 = R2(ridge.pred.min, ytest),
+            RMSE = RMSE(exp(ridge.pred.min), exp(ytest)),
+            MAE = MAE(exp(ridge.pred.min),exp(ytest)))
+
+data.frame( R2 = R2(ridge.pred.lse,ytest),
+            RMSE = RMSE(exp(ridge.pred.lse),exp(ytest)),
+            MAE = MAE(exp(ridge.pred.lse), exp(ytest)))
+
+#elatic net R^2 ,RMSE,MAE data frame with lambda.min,lambda.1se
+
+data.frame ( R2 = R2(elnet.pred.min, ytest),
+            RMSE = RMSE(exp(elnet.pred.min), exp(ytest)),
+            MAE = MAE(exp(elnet.pred.min), exp(ytest)))
+ 
+data.frame ( R2 = R2(elnet.pred.lse, ytest),
+            RMSE = RMSE(exp(elnet.pred.lse), exp(ytest)),
+            MAE = MAE(exp(elnet.pred.lse), exp(ytest)))
+
+```
+
+
+
+```{r}
+# lasso fit,cv and fraction deviation plots
+par(mfrow=c(3,1))
+for (i in 1:3) {
+    assign(paste("fit", i, sep=""), cv.glmnet(x, y, type.measure="mse", 
+                                              alpha=i/10,family="gaussian"))
+}
+
+plot(fit.lasso, xvar="lambda")
+plot(fit.lasso.cv, main="LASSO")
+plot(fit.lasso, xvar="dev",label=5)
+
+
+```
+
+```{r}
+# ridge fit,cv and fraction deviation plots
+par(mfrow=c(3,1))
+for (i in 1:3) {
+    assign(paste("fit", i, sep=""), cv.glmnet(x, y, type.measure="mse", 
+                                              alpha=i/10,family="gaussian"))
+}
+plot(fit.ridge, xvar="lambda")
+plot(fit.ridge.cv, main="Ridge")
+plot(fit.ridge, xvar="dev",label=5)
+
+
+```
+
+```{r}
+# elastic net fit,cv and fraction deviation plots
+par(mfrow=c(3,1))
+for (i in 1:3) {
+    assign(paste("fit", i, sep=""), cv.glmnet(x, y, type.measure="mse", 
+                                              alpha=i/10,family="gaussian"))
+}
+plot(fit.elnet, xvar="lambda")
+plot(fit.elnet.cv, main="Elastic Net")
+plot(fit.elnet, xvar="dev",label=5)
+
+```
+
+```{r}
+# same splitting for random forest but assigned to other variable name as it is not accepting the column names with special characters
+logdf_rf <- logdf
+set.seed(120)
+train_idx <- sample(1:nrow(logdf_rf),as.integer(0.7*nrow(logdf_rf)))
+train_data_rfrg <- logdf_rf[train_idx, ]
+test_data_rfrg <-  logdf[-train_idx, ]
+```
+
+
+```{r}
+#random forest
+install.packages("e1071")
+library(e1071)
+install.packages("randomForest")
+library(randomForest)
+install.packages("devtools")
+library(devtools)
+
+
+
+#as randomforest is not accepting special characters we removed the spaces speacial chararcters in column names
+names(train_data_rfrg) <- gsub("[\\$,-/]","", names(train_data_rfrg))
+names(train_data_rfrg) <- gsub(" ","", names(train_data_rfrg))
+names(train_data_rfrg) <- gsub("_","", names(train_data_rfrg))
+names(train_data_rfrg)
+
+names(test_data_rfrg) <- gsub("[\\$,-/]","", names(test_data_rfrg))
+names(test_data_rfrg) <- gsub(" ","", names(test_data_rfrg))
+names(test_data_rfrg) <- gsub("_","", names(test_data_rfrg))
+names(test_data_rfrg)
+
+
+#random forest regression  
+airbnb.rf=randomForest(price ~ . , data =train_data_rfrg,ntree=1000)
+ airbnb.rf
+importance(airbnb.rf)
+plot(airbnb.rf,col = 'purple')
+getTree(airbnb.rf,k=100)
+tree <- getTree(airbnb.rf, k=1, labelVar=TRUE)
+#realtree <- reprtree:::as.tree(tree, airbnb.rf)
+#prediction for test data
+price_forest_predictions = predict(airbnb.rf, newdata = test_data_rfrg)
+View(price_forest_predictions)
+
+
+data.frame( R2 = R2(price_forest_predictions, test_data_rfrg$price),
+            RMSE = RMSE(exp(price_forest_predictions), exp(test_data_rfrg$price)),
+            MAE = MAE(exp(price_forest_predictions), exp(test_data_rfrg$price)))
+
+```
+
+```{r}
+# tried decision tree for regression not added to report
+install.packages("party")
+library("party")
+x <- ctree(price ~ . , data =train_data_rfrg)
+price_forest = predict(x, newdata = test_data_rfrg)
+data.frame(R2 = R2(price_forest, test_data_rfrg$price),
+RMSE = RMSE(price_forest, test_data_rfrg$price),
+MAE = MAE(price_forest, test_data_rfrg$price))
+#Print(R2,RMSE,)
+plot(x)
+R2
+RMSE
+MAE
+```
+
+```{r}
+
+#linear regression R^2 ,RMSE,MAE data frame with lambda.min,lambda.1se
+data.frame ( R2 = R2(lmpre, y_price),
+            RMSE = RMSE(exp(lmpre),exp(y_price)),
+            MAE = MAE(exp(lmpre), exp(y_price)))
+
+#lasso R^2 ,RMSE,MAE data frame with lambda.min,lambda.1se
+data.frame( R2 = R2(lasso.pred.min, ytest),
+            RMSE = RMSE(exp(lasso.pred.min),exp(ytest)),
+            MAE = MAE(exp(lasso.pred.min), exp(ytest)))
+
+data.frame( R2 = R2(lasso.pred.lse, ytest),
+            RMSE = RMSE(exp(lasso.pred.lse), exp(ytest)),
+            MAE = MAE(exp(lasso.pred.lse), exp(ytest)))
+
+#ridge R^2 ,RMSE,MAE data frame with lambda.min,lambda.1se
+data.frame( R2 = R2(ridge.pred.min, ytest),
+            RMSE = RMSE(exp(ridge.pred.min), exp(ytest)),
+            MAE = MAE(exp(ridge.pred.min),exp(ytest)))
+
+data.frame( R2 = R2(ridge.pred.lse,ytest),
+            RMSE = RMSE(exp(ridge.pred.lse),exp(ytest)),
+            MAE = MAE(exp(ridge.pred.lse), exp(ytest)))
+
+#elatic net R^2 ,RMSE,MAE data frame with lambda.min,lambda.1se
+
+data.frame ( R2 = R2(elnet.pred.min, ytest),
+            RMSE = RMSE(exp(elnet.pred.min), exp(ytest)),
+            MAE = MAE(exp(elnet.pred.min), exp(ytest)))
+ 
+data.frame ( R2 = R2(elnet.pred.lse, ytest),
+            RMSE = RMSE(exp(elnet.pred.lse), exp(ytest)),
+            MAE = MAE(exp(elnet.pred.lse), exp(ytest)))
+
+#Random forest R^2 ,RMSE,MAE data frame with lambda.min,lambda.1se
+
+data.frame( R2 = R2(price_forest_predictions, test_data_rfrg$price),
+            RMSE = RMSE(exp(price_forest_predictions), exp(test_data_rfrg$price)),
+            MAE = MAE(exp(price_forest_predictions), exp(test_data_rfrg$price)))
+
+#Decision tree R^2 ,RMSE,MAE data frame with lambda.min,lambda.1se
+
+data.frame(R2 = R2(price_forest, test_data_rfrg$price),
+RMSE = RMSE(exp(price_forest), exp(test_data_rfrg$price)),
+MAE = MAE(exp(price_forest), exp(test_data_rfrg$price)))
+
+```
+
+
+```{r}
+
+# created a data frame with the values of  R^2, RMSE, MAE values of all regression models
+
+comp_reg <- data.frame(method=c("linear","lasso.lambda.min","lasso.lamba.lse","ridge.lambda.min","ridge.lambda.lse","elnet.lambda.min","elnet.lambda.lse","randomforest","Decision tree"),
+                       RMSE=c(162,162,165,163,166,162,164,143,160),Adj_R2 =c(0.587,0.587,0.582,0.587,0.584,0.587,0.585,0.702,0.566),MAE = c(56.3,56.3,57.2,56.4,57.6,56.3,57,45.6,56.8))
+
+View(comp_reg)
+
+# comparision of all models  with bar chart
+
+ggplot(data=comp_reg, aes(x=method, y=RMSE,, fill=method)) +
+  geom_bar(stat="identity")+
+  geom_text(aes(label=RMSE), vjust=1.6, color="white", size=3.5)+
+  theme_minimal()+theme(text = element_text(size=12),
+        axis.text.x = element_text(angle=90, hjust=1))
+
+ggplot(data=comp_reg, aes(x=method, y=Adj_R2,, fill=method)) +
+  geom_bar(stat="identity")+
+  geom_text(aes(label=Adj_R2), vjust=1.6, color="white", size=3.5)+
+  theme_minimal()+theme(text = element_text(size=12),
+        axis.text.x = element_text(angle=90, hjust=1))
+
+ggplot(data=comp_reg, aes(x=method, y=MAE,, fill=method)) +
+  geom_bar(stat="identity")+
+  geom_text(aes(label=MAE), vjust=1.6, color="white", size=3.5)+
+  theme_minimal()+theme(text = element_text(size=12),
+        axis.text.x = element_text(angle=90, hjust=1))
+
+
+
+```
+
+
+```{r}
+###CLASSIFICATION
+# Feature selection
+
+library(Boruta)
+set.seed(123)
+boruta.train <- Boruta(room_type~., data = Airbnb, doTrace = 2)
+print(boruta.train)
+
+
+```
+
+
+
+```{r}
+
+summary(boruta.train)
+boruta.train$finalDecision
+final.boruta <- TentativeRoughFix(boruta.train)
+print(final.boruta)
+
+```
+
+```{r}
+plot(boruta.train, xlab = "", xaxt = "n")
+lz<-lapply(1:ncol(boruta.train$ImpHistory),function(i)
+boruta.train$ImpHistory[is.finite(boruta.train$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.train$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(boruta.train$ImpHistory), cex.axis = 0.7)
+
+```
+
+```{r}
+
+final.boruta <- TentativeRoughFix(boruta.train)
+print(final.boruta)
+getSelectedAttributes(final.boruta, withTentative = F)
+boruta.df <- attStats(final.boruta)
+ print(boruta.df)
+```
+
+```{r}
+#New dataframe with top 7 important features
+names(Airbnb)
+Airbnb_new <- Airbnb[,c(22,14,26,16,18,17,15)]
+View(Airbnb_new)
+
+
+```
+
+```{r}
+#Data Exploration of target variable roomtype
+# frequency of dependent classes in room type
+install.packages("ggplot2")
+install.packages("caret")
+library(caret)
+library(ggplot2)
+freq <-  as.data.frame(table(Airbnb$room_type))
+ggplot(freq, aes(x=Var1, y=Freq)) +
+  geom_bar(stat="identity", width=.5, fill="#a3c4dc") +
+  labs(title="Room Type Bar Chart", x = "Room Type", y = "Count")+theme_bw()
+```
+
+```{r}
+#creating density plot
+install.packages("AppliedPredictiveModeling")
+library(AppliedPredictiveModeling)
+transparentTheme(trans = .4)
+x <- Airbnb_new[,-c(2,7)]
+y <-  Airbnb_new[,c(7)]
+
+# density plots for two roomtypes
+featurePlot(x , 
+            y ,
+            plot = "density", 
+            ## Pass in options to xyplot() to 
+            ## make it prettier
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            layout = c(4, 1), 
+            auto.key = list(columns = 2))
+
+```
+
+```{r}
+# Split the data into training and test set
+set.seed(120)
+train_idx <- sample(1:nrow(Airbnb_new),as.integer(0.7*nrow(Airbnb_new)))
+train_data <- Airbnb_new[train_idx, ]
+test_data <-  Airbnb_new[-train_idx, ]
+```
+
+```{r}
+# Fit the model
+#Multinominal classification
+model <- nnet::multinom(room_type ~., data = train_data)
+# Summarize the model
+summary(model)
+# Make predictions
+predicted.classes <- model %>% predict(test_data)
+head(predicted.classes)
+# Model accuracy
+mean(predicted.classes == test_data$room_type)
+levels(Airbnb_new$room_type)
+```
+
+```{r}
+# for binomial classification removing extra classification in target variable. after running this run the splittig code again for logistic
+Airbnb_new_model <- Airbnb_new
+Airbnb_new_model <- Airbnb_new_model[-which(Airbnb_new_model$room_type =="Shared room"),]
+Airbnb_new_model$room_type <- factor(Airbnb_new_model$room_type)
+unique(Airbnb_new_model$room_type)
+```
+
+```{r}
+# One hot encoding
+Airbnb_new_model$property_type = factor(Airbnb_new_model$property_type) 
+dumm = as.data.frame(model.matrix(~Airbnb_new_model$property_type)[,-1])
+Airbnb_new_dumm = cbind(Airbnb_new_model, dumm) 
+str(Airbnb_new_dumm)
+Airbnb_new_dumm <- Airbnb_new_dumm[,-c(2)]
+dim(dumm)
+```
+
+```{r}
+#split the data
+set.seed(120)
+train_idx <- sample(1:nrow(Airbnb_new_dumm),as.integer(0.7*nrow(Airbnb_new_dumm)))
+train_data<- Airbnb_new_dumm[train_idx, ]
+test_data<-  Airbnb_new_dumm[-train_idx, ]
+#knn labels
+train_data_labels <- Airbnb_new_dumm[train_idx, 7]
+test_data_labels <-  Airbnb_new_dumm[-train_idx, 7]
+
+```
+
+
+```{r}
+#logistic clasification
+install.packages("ROCR")
+library(ROCR)
+names(Airbnb_new_dumm)
+str(train_data$room_type)
+levels(train_data$room_type)
+logit_roomtype <- glm(room_type ~., data = train_data, family = binomial ,maxit=100)
+summary(logit_roomtype)
+y <- factor(test_data$room_type)
+#glm.probs <- predict(logit_roomtype,type = "response")
+logit.pred = predict(logit_roomtype, newdata = test_data, type = "response")
+
+#predictions <- glm.probs # predicted probabiities 
+
+levels(y)
+pred <- prediction(logit.pred,y)
+ROC.perf <- performance(pred, "tpr", "fpr")
+#auc for logit
+auc.logit <- performance(pred,"auc")
+auc.logit@y.values
+# confusion matrix
+logit.ypred <- factor(ifelse(logit.pred >0.8 ,"Private room","Entire home/apt"))
+confusionMatrix(y,logit.ypred)
+confusionMatrix(y,logit.ypred,positive = "Private room")
+
+
+```
+
+
+
+
+```{r}
+#Classification with Decision tree
+#decision tree
+
+library(rpart)
+install.packages("rpart.plot")
+library(rpart.plot)
+
+tree_roomtype <-rpart(room_type~.,method="class", data = train_data, control = (xval = 4))
+?rpart
+printcp(tree_roomtype)
+plotcp(tree_roomtype)
+rpart.plot(tree_roomtype)
+# predict
+tree_predictions = predict(tree_roomtype, newdata = test_data, type = "prob")
+tree_pred <- prediction(tree_predictions[,2], test_data$room_type)
+ROC.tree <- performance(tree_pred, "tpr", "fpr")
+ROC.tree
+
+#Auc
+auc.tree <- performance(tree_pred,"auc")
+auc.tree@y.values
+#Confusion matrix
+tree.pred.y <- factor(ifelse(tree_predictions[,1] <0.8 ,"Private room","Entire home/apt"))
+confusionMatrix(y,tree.pred.y)
+
+
+```
+
+
+```{r}
+#split the data
+
+set.seed(120)
+train_idx1 <- sample(1:nrow(Airbnb_new_dumm),as.integer(0.7*nrow(Airbnb_new_dumm)))
+train_data1 <- Airbnb_new_dumm[train_idx, ]
+test_data1 <-  Airbnb_new_dumm[-train_idx, ]
+
+
+```
+
+```{r}
+#as randomforest is not accepting special characters we removed the spaces speacial chararcters in column names
+names(train_data1) <- gsub("[\\$,-/]","", names(train_data1))
+names(train_data1) <- gsub(" ","", names(train_data1))
+names(train_data1) <- gsub("_","", names(train_data1))
+names(train_data1)
+
+names(test_data1) <- gsub("[\\$,-/]","", names(test_data1))
+names(test_data1) <- gsub(" ","", names(test_data1))
+names(test_data1) <- gsub("_","", names(test_data1))
+names(test_data1)
+
+
+```
+
+```{r}
+#random forest
+install.packages("e1071")
+library(e1071)
+install.packages("randomForest")
+library(randomForest)
+dim(train_data)
+#dim(test_data)
+names(test_data1)
+
+forest_fit <- randomForest(roomtype~.,
+                      data=train_data1, 
+                      importance=TRUE, 
+                      ntree=500)
+importance(forest_fit)
+plot(forest_fit)
+forest_predictions = predict(forest_fit, newdata = test_data1, type = "prob")
+forest_pred <- prediction(forest_predictions[,2], test_data1$roomtype)
+ROC.rforest <-  performance(forest_pred,"tpr","fpr")
+levels(test_data$room_type)
+#auc
+
+auc.rforest <-  performance(forest_pred,"auc")
+auc.rforest@y.values
+#confusion matrix
+rforest.pred.y <- factor(ifelse(forest_predictions[,1] <0.8 ,"Private room","Entire home/apt"))
+confusionMatrix(test_data1$roomtype,rforest.pred.y)
+
+```
+
+```{r}
+#Classification with Random forest
+#plot comparison
+plot (ROC.perf,col='red')
+plot (ROC.tree,col='green',add = TRUE)
+plot (ROC.rforest,col='blue',add = TRUE)
+#plot (ROC.knn,col= 'yellow', add = TRUE)
+abline(a=0,b=1,lty=2)
+
+legend( "bottomright",0, 1,legend=c("Logistic Reg", "Decission Tree", "Random Forest"),
+       col=c("red", "green", "blue","yellow"), lty=1:2, cex=0.8)
+
+auc.logit@y.values
+auc.tree@y.values
+auc.rforest@y.values
+```
+
+
+
+
